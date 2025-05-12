@@ -1,56 +1,53 @@
-# storage/oss_connector.py
-import oss2
+import pandas as pd
 from io import StringIO
+from config import config  # 从config模块导入config对象
+
+if config.is_local:
+    from minio import Minio
+else:
+    import oss2
 
 
 class OSSConnector:
-    def __init__(self, endpoint=None, access_key_id=None, access_key_secret=None, bucket_name=None):
-        """
-        初始化OSS连接器
+    def __init__(self):
+        if config.is_local:
+            # MinIO本地配置
+            self.client = Minio(
+                config.MINIO_ENDPOINT,
+                access_key=config.MINIO_ACCESS_KEY,
+                secret_key=config.MINIO_SECRET_KEY,
+                secure=False
+            )
+        else:
+            # 阿里云OSS配置
+            self.auth = oss2.Auth(
+                config.OSS_ACCESS_KEY,  # 使用config对象而不是settings
+                config.OSS_SECRET_KEY
+            )
+            self.bucket = oss2.Bucket(
+                self.auth,
+                config.OSS_ENDPOINT,
+                config.OSS_BUCKET
+            )
 
-        参数:
-            endpoint: OSS端点
-            access_key_id: 访问密钥ID
-            access_key_secret: 访问密钥
-            bucket_name: 存储桶名称
-        """
-        self.endpoint = endpoint
-        self.access_key_id = access_key_id
-        self.access_key_secret = access_key_secret
-        self.bucket_name = bucket_name
-        self._bucket = None
-
-    @property
-    def bucket(self):
-        """延迟初始化bucket"""
-        if self._bucket is None:
-            auth = oss2.Auth(self.access_key_id, self.access_key_secret)
-            self._bucket = oss2.Bucket(auth, self.endpoint, self.bucket_name)
-        return self._bucket
-
-    def upload_dataframe(self, df, object_name):
-        """上传DataFrame到OSS"""
+    def upload_dataframe(self, df, file_key: str) -> bool:
+        """通用DataFrame上传方法"""
         try:
-            # 直接使用to_csv返回的字符串
-            csv_data = df.to_csv(index=False)
-            self.bucket.put_object(object_name, csv_data)
+            csv_buffer = StringIO()
+            df.to_csv(csv_buffer, index=False)
+
+            if config.is_local:
+                from io import BytesIO
+                self.client.put_object(
+                    config.OSS_BUCKET,
+                    file_key,
+                    BytesIO(csv_buffer.getvalue().encode()),
+                    length=len(csv_buffer.getvalue())
+                )
+            else:
+                self.bucket.put_object(file_key, csv_buffer.getvalue())
+
             return True
         except Exception as e:
-            print(f"上传到OSS失败: {str(e)}")
+            print(f"上传失败: {str(e)}")
             return False
-
-    def upload_category_data(self, df) -> bool:
-        """上传分类数据"""
-        return self.upload_dataframe(df, OSS_FILE_PATHS["category"])
-
-    def upload_price_data(self, df) -> bool:
-        """上传价格数据"""
-        return self.upload_dataframe(df, OSS_FILE_PATHS["price"])
-
-    def list_objects(self, prefix: str = "") -> list:
-        """列出OSS中的对象"""
-        try:
-            return [obj.key for obj in oss2.ObjectIterator(self.bucket, prefix=prefix)]
-        except Exception as e:
-            print(f"列出OSS对象失败: {e}")
-            return []

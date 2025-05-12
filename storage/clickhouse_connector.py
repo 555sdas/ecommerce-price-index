@@ -1,74 +1,45 @@
 from clickhouse_driver import Client
-from typing import List, Optional
-from config.settings import settings
-from config.constants import CATEGORY_SCHEMA, PRICE_SCHEMA, OSS_FILE_PATHS
+from config import config
 
 
 class ClickHouseConnector:
     def __init__(self):
+        # 连接设置使用 config 中的端口号
         self.client = Client(
-            host=settings.CLICKHOUSE_HOST,
-            port=settings.CLICKHOUSE_PORT,
-            user=settings.CLICKHOUSE_USER,
-            password=settings.CLICKHOUSE_PASSWORD
+            host=config.CH_HOST,  # 这里应该是 ClickHouse 服务的主机地址
+            port=config.CH_PORT,  # 设置端口为 8014
+            user=config.CH_USER,  # 用户名
+            password=config.CH_PASSWORD,  # 密码
+            **self._get_conn_options()  # 差异化连接配置
         )
 
-    def execute_query(self, query: str, params=None):
-        """执行SQL查询"""
-        return self.client.execute(query, params)
+    def _get_conn_options(self):
+        # 根据环境区分连接选项
+        return {
+            'local': {'compression': False},
+            'cloud': {'secure': True, 'ca_certs': '/etc/ssl/certs/ca-certificates.crt'}
+        }[config.env]  # 根据环境选择不同配置
 
-    def create_external_table(self, table_name: str, schema: dict, file_path: str):
-        """创建OSS外部表"""
-        fields_with_types = [
-            f"{field} {type_}"
-            for field, type_ in zip(schema["fields"], schema["types"])
-        ]
-
-        query = f"""
-        CREATE TABLE IF NOT EXISTS {table_name}_external (
-            {', '.join(fields_with_types)}
-        ) ENGINE = URL('https://{settings.OSS_BUCKET_NAME}.{settings.OSS_ENDPOINT}/{file_path}', 'CSV')
-        """
-        self.execute_query(query)
-
-    def create_materialized_table(self, table_name: str, schema: dict):
-        """创建物化表"""
-        fields_with_types = [
-            f"{field} {type_}"
-            for field, type_ in zip(schema["fields"], schema["types"])
-        ]
-
-        query = f"""
-        CREATE TABLE IF NOT EXISTS {table_name} (
-            {', '.join(fields_with_types)}
-        ) ENGINE = MergeTree()
-        ORDER BY {schema["fields"][0]}
-        """
-        self.execute_query(query)
-
-    def create_materialized_view(self, source_table: str, target_table: str):
-        """创建物化视图"""
-        query = f"""
-        CREATE MATERIALIZED VIEW IF NOT EXISTS {target_table}_mv 
-        TO {target_table} 
-        AS SELECT * FROM {source_table}
-        """
-        self.execute_query(query)
+    def execute(self, query: str):
+        """统一执行接口"""
+        return self.client.execute(query)
 
     def initialize_tables(self):
-        """初始化所有表结构"""
-        # 分类数据
-        self.create_external_table("category", CATEGORY_SCHEMA, OSS_FILE_PATHS["category"])
-        self.create_materialized_table("category", CATEGORY_SCHEMA)
-        self.create_materialized_view("category_external", "category")
+        """初始化数据库表"""
+        self.client.execute('''
+        CREATE TABLE IF NOT EXISTS category (
+            category_id UInt32,
+            category_name String
+        ) ENGINE = MergeTree()
+        ORDER BY category_id;
+        ''')
 
-        # 价格数据
-        self.create_external_table("price", PRICE_SCHEMA, OSS_FILE_PATHS["price"])
-        self.create_materialized_table("price", PRICE_SCHEMA)
-        self.create_materialized_view("price_external", "price")
-
-        # 价格指数表
-        self.create_materialized_table("price_index", {
-            "fields": ["date", "cavallo_index", "tmall_index"],
-            "types": ["Date", "Float32", "Float32"]
-        })
+        self.client.execute('''
+        CREATE TABLE IF NOT EXISTS price (
+            item_id UInt32,
+            category_id UInt32,
+            date Date,
+            price Float32
+        ) ENGINE = MergeTree()
+        ORDER BY (category_id, date);
+        ''')

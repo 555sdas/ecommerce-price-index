@@ -49,9 +49,11 @@ def main():
 
         logger.info("4. 上传数据到OSS...")
         oss = OSSConnector()
-        if not oss.upload_category_data(category_df):
+        if not oss.upload_dataframe(category_df, "category/category.csv"):
             raise RuntimeError("分类数据上传OSS失败")
-        if not oss.upload_price_data(price_df):
+
+        # 价格数据上传同理：
+        if not oss.upload_dataframe(price_df, "price/price.csv"):
             raise RuntimeError("价格数据上传OSS失败")
 
         logger.info("5. 初始化ClickHouse表结构...")
