@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project version="4">
+  <component name="SqlDialectMappings">
+    <file url="file://$APPLICATION_CONFIG_DIR$/consoles/db/bcf060da-5f61-4425-bbb3-9d76004a2cdb/console.sql" dialect="ClickHouse" />
+    <file url="file://$PROJECT_DIR$/analysis/price_index.py" dialect="GenericSQL" />
+    <file url="file://$PROJECT_DIR$/storage/clickhouse_connector.py" dialect="ClickHouse" />
+  </component>
+</project>

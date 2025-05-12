@@ -3,105 +3,76 @@ import numpy as np
 import pandas as pd
 from datetime import datetime, timedelta
 from typing import Tuple
-from config.settings import settings
+from config.local_settings import settings
 from config.constants import CATEGORY_SCHEMA, PRICE_SCHEMA
 import logging
 
 logger = logging.getLogger("data_generator")
-
+logger.setLevel(logging.INFO)
 
 class DataGenerator:
     def __init__(self):
         np.random.seed(42)
-        logger.info(f"Initializing DataGenerator with settings: "
-                    f"SIMULATE_DAYS={settings.SIMULATE_DAYS}, "
-                    f"CATEGORIES={settings.SIMULATE_CATEGORIES}, "
-                    f"ITEMS_PER_CAT={settings.SIMULATE_ITEMS_PER_CAT}")
+        self.categories = settings.SIMULATE_CATEGORIES
+        self.n_items = settings.SIMULATE_ITEMS_PER_CAT
+        self.price_range = settings.SIMULATE_PRICE_RANGE
+        self.days = pd.date_range(end=datetime.now().date(), periods=settings.SIMULATE_DAYS)
 
     def generate_category_data(self) -> pd.DataFrame:
-        """生成商品分类数据"""
         logger.info("Generating category data...")
-        categories = [
-            {
-                "category_id": i,
-                "name": cat,
-                "weight": settings.CATEGORY_WEIGHTS[cat]
-            }
-            for i, cat in enumerate(settings.SIMULATE_CATEGORIES)
-        ]
-        df = pd.DataFrame(categories, columns=CATEGORY_SCHEMA["fields"])
-        logger.info(f"Generated category data with {len(df)} rows")
-        return df
+        categories = [{
+            "category_id": idx,
+            "name": cat,
+            "weight": settings.CATEGORY_WEIGHTS.get(cat, 0.0),
+            "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        } for idx, cat in enumerate(self.categories)]
+        return pd.DataFrame(categories, columns=["category_id", "name", "weight", "timestamp"])
 
-    def generate_price_data(self) -> pd.DataFrame:
-        """生成商品价格数据"""
-        logger.info("Generating price data...")
-        # 生成日期范围
-        end_date = datetime.now().date()
-        start_date = end_date - timedelta(days=settings.SIMULATE_DAYS - 1)
-        dates = pd.date_range(start=start_date, end=end_date)
-        logger.info(f"Date range: {start_date} to {end_date}")
-
-        # 生成商品基础数据
-        items = []
-        for cat in settings.SIMULATE_CATEGORIES:
-            for i in range(settings.SIMULATE_ITEMS_PER_CAT):
-                items.append({
-                    'item_id': f"{cat[:1]}{i:03d}",
-                    'category': cat,
-                    'base_price': np.random.uniform(*settings.SIMULATE_PRICE_RANGE)
+    def generate_item_data(self) -> pd.DataFrame:
+        logger.info("Generating item data...")
+        item_records = []
+        for cat_id, cat in enumerate(self.categories):
+            for i in range(self.n_items):
+                item_id = f"{cat[:1]}{i:03d}"
+                item_records.append({
+                    "item_id": item_id,
+                    "category_id": cat_id
                 })
-        logger.info(f"Generated {len(items)} items")
+        return pd.DataFrame(item_records, columns=["item_id", "category_id"])
 
-        # 生成每日价格数据
+    def generate_price_data(self, item_df: pd.DataFrame) -> pd.DataFrame:
+        logger.info("Generating price data...")
+        base_prices = {item_id: np.random.uniform(*self.price_range) for item_id in item_df["item_id"]}
         data = []
-        for date in dates:
-            for item in items:
-                change_pct = np.random.normal(loc=0, scale=0.03)
-                new_price = max(1.0, item['base_price'] * (1 + change_pct))
-                data.append([date.date(), item['item_id'], item['category'], round(new_price, 2)])
-                item['base_price'] = new_price
 
-        df = pd.DataFrame(data, columns=PRICE_SCHEMA["fields"])
-        logger.info(f"Generated price data with {len(df)} rows")
+        for date in self.days:
+            for item_id in item_df["item_id"]:
+                pct_change = np.random.normal(loc=0, scale=0.03)
+                new_price = max(1.0, base_prices[item_id] * (1 + pct_change))
+                data.append([
+                    date.date(), item_id, round(new_price, 2)
+                ])
+                base_prices[item_id] = new_price
+
+        df = pd.DataFrame(data, columns=["date", "item_id", "price"])
         return df
 
-    def generate_all_data(self) -> Tuple[pd.DataFrame, pd.DataFrame]:
-        """生成所有数据，并追加写入 CSV 文件（含时间戳）"""
-        logger.info("Starting to generate all data...")
+    def save_data(self, df: pd.DataFrame, filename: str):
+        path = settings.DATA_DIR / filename
+        df.to_csv(path, index=False)
+        logger.info(f"Saved {filename} to: {path.resolve()}")
 
-        # 确保数据目录存在
-        os.makedirs(settings.DATA_DIR, exist_ok=True)
-        logger.info(f"Data directory: {settings.DATA_DIR}")
+    def generate_all_data(self) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+        logger.info("Generating all data...")
+        settings.DATA_DIR.mkdir(parents=True, exist_ok=True)
 
         category_df = self.generate_category_data()
-        price_df = self.generate_price_data()
+        item_df = self.generate_item_data()
+        price_df = self.generate_price_data(item_df)
 
-        # 添加时间戳列
-        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        category_df["timestamp"] = timestamp
-        price_df["timestamp"] = timestamp
 
-        # 设置备份路径
-        category_path = settings.DATA_DIR / "category_backup.csv"
-        price_path = settings.DATA_DIR / "price_backup.csv"
-        logger.info(f"Backup paths - Category: {category_path}, Price: {price_path}")
+        self.save_data(category_df, "category.csv")
+        self.save_data(item_df, "item.csv")
+        self.save_data(price_df, "price.csv")
 
-        # 追加保存数据（若文件不存在则写入表头）
-        try:
-            category_df.to_csv(
-                category_path, mode='a',
-                header=not os.path.exists(category_path),
-                index=False
-            )
-            price_df.to_csv(
-                price_path, mode='a',
-                header=not os.path.exists(price_path),
-                index=False
-            )
-            logger.info("Data successfully saved to local CSV files")
-        except Exception as e:
-            logger.error(f"Failed to save data to CSV: {str(e)}")
-            raise
-
-        return category_df, price_df
+        return category_df, price_df, item_df
